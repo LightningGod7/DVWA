@@ -1,11 +1,9 @@
 <?php
 header("Content-Type: application/json; charset=UTF-8");
 
-if (array_key_exists ("callback", $_GET)) {
-	$callback = $_GET['callback'];
-} else {
-	return "";
-}
+// The callback name is not taken from user input; an attacker controlled
+// callback turns a JSONP endpoint into arbitrary script execution.
+$callback = "solveSum";
 
 $outp = array ("answer" => "15");
 

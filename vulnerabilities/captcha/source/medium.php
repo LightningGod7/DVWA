@@ -1,83 +1,77 @@
 <?php
 
-if( isset( $_POST[ 'Change' ] ) && ( $_POST[ 'step' ] == '1' ) ) {
-	// Hide the CAPTCHA form
+// Step 1: solve the CAPTCHA. The result of that check is recorded in the
+// session only - the client is never trusted to say it passed.
+if( isset( $_POST[ 'Change' ] ) && isset( $_POST[ 'step' ] ) && ( $_POST[ 'step' ] == '1' ) ) {
 	$hide_form = true;
 
-	// Get input
 	$pass_new  = $_POST[ 'password_new' ];
 	$pass_conf = $_POST[ 'password_conf' ];
 
-	// Check CAPTCHA from 3rd party
 	$resp = recaptcha_check_answer(
-		$_DVWA[ 'recaptcha_private_key' ],
-		$_POST['g-recaptcha-response']
+		$_DVWA[ 'recaptcha_private_key'],
+		isset( $_POST['g-recaptcha-response'] ) ? $_POST['g-recaptcha-response'] : ''
 	);
 
-	// Did the CAPTCHA fail?
 	if( !$resp ) {
-		// What happens when the CAPTCHA was entered incorrectly
+		unset( $_SESSION[ 'captcha_passed_m' ] );
 		$html     .= "<pre><br />The CAPTCHA was incorrect. Please try again.</pre>";
 		$hide_form = false;
 		return;
 	}
+
+	if( $pass_new == $pass_conf ) {
+		$_SESSION[ 'captcha_passed_m' ] = true;
+		$safe_new  = htmlspecialchars( $pass_new, ENT_QUOTES, 'UTF-8' );
+		$safe_conf = htmlspecialchars( $pass_conf, ENT_QUOTES, 'UTF-8' );
+		$html .= "
+			<pre><br />You passed the CAPTCHA! Click the button to confirm your changes.<br /></pre>
+			<form action=\"#\" method=\"POST\">
+				<input type=\"hidden\" name=\"step\" value=\"2\" />
+				<input type=\"hidden\" name=\"password_new\" value=\"{$safe_new}\" />
+				<input type=\"hidden\" name=\"password_conf\" value=\"{$safe_conf}\" />
+				<input type=\"submit\" name=\"Change\" value=\"Change\" />
+			</form>";
+	}
 	else {
-		// CAPTCHA was correct. Do both new passwords match?
-		if( $pass_new == $pass_conf ) {
-			// Show next stage for the user
-			$html .= "
-				<pre><br />You passed the CAPTCHA! Click the button to confirm your changes.<br /></pre>
-				<form action=\"#\" method=\"POST\">
-					<input type=\"hidden\" name=\"step\" value=\"2\" />
-					<input type=\"hidden\" name=\"password_new\" value=\"{$pass_new}\" />
-					<input type=\"hidden\" name=\"password_conf\" value=\"{$pass_conf}\" />
-					<input type=\"hidden\" name=\"passed_captcha\" value=\"true\" />
-					<input type=\"submit\" name=\"Change\" value=\"Change\" />
-				</form>";
-		}
-		else {
-			// Both new passwords do not match.
-			$html     .= "<pre>Both passwords must match.</pre>";
-			$hide_form = false;
-		}
+		unset( $_SESSION[ 'captcha_passed_m' ] );
+		$html     .= "<pre>Both passwords must match.</pre>";
+		$hide_form = false;
 	}
 }
 
-if( isset( $_POST[ 'Change' ] ) && ( $_POST[ 'step' ] == '2' ) ) {
-	// Hide the CAPTCHA form
+// Step 2: only reachable if the server recorded a successful CAPTCHA.
+if( isset( $_POST[ 'Change' ] ) && isset( $_POST[ 'step' ] ) && ( $_POST[ 'step' ] == '2' ) ) {
 	$hide_form = true;
 
-	// Get input
-	$pass_new  = $_POST[ 'password_new' ];
-	$pass_conf = $_POST[ 'password_conf' ];
-
-	// Check to see if they did stage 1
-	if( !$_POST[ 'passed_captcha' ] ) {
+	if( empty( $_SESSION[ 'captcha_passed_m' ] ) ) {
 		$html     .= "<pre><br />You have not passed the CAPTCHA.</pre>";
 		$hide_form = false;
 		return;
 	}
 
-	// Check to see if both password match
+	$pass_new  = $_POST[ 'password_new' ];
+	$pass_conf = $_POST[ 'password_conf' ];
+
 	if( $pass_new == $pass_conf ) {
-		// They do!
-		$pass_new = ((isset($GLOBALS["___mysqli_ston"]) && is_object($GLOBALS["___mysqli_ston"])) ? mysqli_real_escape_string($GLOBALS["___mysqli_ston"],  $pass_new ) : ((trigger_error("[MySQLConverterToo] Fix the mysql_escape_string() call! This code does not work.", E_USER_ERROR)) ? "" : ""));
-		$pass_new = md5( $pass_new );
+		unset( $_SESSION[ 'captcha_passed_m' ] );
 
-		// Update database
-		$insert = "UPDATE `users` SET password = '$pass_new' WHERE user = '" . dvwaCurrentUser() . "';";
-		$result = mysqli_query($GLOBALS["___mysqli_ston"],  $insert ) or die( '<pre>' . ((is_object($GLOBALS["___mysqli_ston"])) ? mysqli_error($GLOBALS["___mysqli_ston"]) : (($___mysqli_res = mysqli_connect_error()) ? $___mysqli_res : false)) . '</pre>' );
+		$pass_new     = md5( $pass_new );
+		$current_user = dvwaCurrentUser();
 
-		// Feedback for the end user
+		$stmt = mysqli_prepare( $GLOBALS["___mysqli_ston"], "UPDATE `users` SET password = ? WHERE user = ?" );
+		if( $stmt ) {
+			mysqli_stmt_bind_param( $stmt, "ss", $pass_new, $current_user );
+			mysqli_stmt_execute( $stmt );
+			mysqli_stmt_close( $stmt );
+		}
+
 		$html .= "<pre>Password Changed.</pre>";
 	}
 	else {
-		// Issue with the passwords matching
-		$html .= "<pre>Passwords did not match.</pre>";
+		$html     .= "<pre>Passwords did not match.</pre>";
 		$hide_form = false;
 	}
-
-	((is_null($___mysqli_res = mysqli_close($GLOBALS["___mysqli_ston"]))) ? false : $___mysqli_res);
 }
 
 ?>
