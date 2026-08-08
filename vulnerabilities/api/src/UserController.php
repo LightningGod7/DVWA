@@ -89,8 +89,15 @@ class UserController
 			$gc->processRequest();
 			exit();
 		}
+
+		// Mass assignment guard: only the name is updatable through this
+		// endpoint. Privilege fields such as level are not client controlled.
+		$input = array ('name' => $input['name']);
 		$response['status_code_header'] = 'HTTP/1.1 200 OK';
-		$response['body'] = json_encode ($this->data[$id]->toArray($this->version));
+		$user_data = $this->data[$id]->toArray($this->version);
+		// Credential material is never returned by the API.
+		unset ($user_data['password']);
+		$response['body'] = json_encode ($user_data);
 		return $response;
 	}	
 
@@ -116,7 +123,9 @@ class UserController
 		$response['status_code_header'] = 'HTTP/1.1 200 OK';
 		$all = array();
 		foreach ($this->data as $user) {
-			$all[] = $user->toArray($this->version);
+			$user_data = $user->toArray($this->version);
+			unset ($user_data['password']);
+			$all[] = $user_data;
 		}
 		$response['body'] = json_encode($all);
 		return $response;
@@ -167,7 +176,9 @@ class UserController
 		$user = new User(null, $input['name'], intval ($input['level']), hash ("sha256", "password"));
 		$this->data[] = $user;
 		$response['status_code_header'] = 'HTTP/1.1 201 Created';
-		$response['body'] = json_encode($user->toArray($this->version));
+		$user_data = $user->toArray($this->version);
+		unset ($user_data['password']);
+		$response['body'] = json_encode($user_data);
 		return $response;
 	}
 
@@ -225,7 +236,10 @@ class UserController
 			$this->data[$id]->level = intval ($input['level']);
 		}
 		$response['status_code_header'] = 'HTTP/1.1 200 OK';
-		$response['body'] = json_encode ($this->data[$id]->toArray($this->version));
+		$user_data = $this->data[$id]->toArray($this->version);
+		// Credential material is never returned by the API.
+		unset ($user_data['password']);
+		$response['body'] = json_encode ($user_data);
 		return $response;
 	}	
 
