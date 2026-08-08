@@ -102,7 +102,16 @@ function dvwa_start_session() {
 	 * fixation, and it is applied at every security level.
 	 */
 	session_start();
-	session_regenerate_id(true); // new id, old session file deleted
+	/*
+	 * Regenerate WITHOUT deleting the old session object. Passing true asks the
+	 * save handler to destroy a session that, on the very first request, has not
+	 * been written yet; that failure emits a warning, and the warning is output,
+	 * so the Set-Cookie header carrying the new id is never sent. The client then
+	 * keeps an id whose data the server just discarded and no session -- and so no
+	 * anti-CSRF token and no login -- ever survives a request. The old id is still
+	 * replaced here, which is what closes the session fixation hole.
+	 */
+	session_regenerate_id();
 }
 
 if (array_key_exists ("Login", $_POST) && $_POST['Login'] == "Login") {
