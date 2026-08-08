@@ -1,43 +1,33 @@
 <?php
 
-if( isset( $_POST[ 'Submit' ]  ) ) {
+if( isset( $_POST[ 'Submit' ] ) ) {
 	// Get input
 	$id = $_POST[ 'id' ];
 	$exists = false;
 
 	switch ($_DVWA['SQLI_DB']) {
 		case MYSQL:
-			$id = ((isset($GLOBALS["___mysqli_ston"]) && is_object($GLOBALS["___mysqli_ston"])) ? mysqli_real_escape_string($GLOBALS["___mysqli_ston"],  $id ) : ((trigger_error("[MySQLConverterToo] Fix the mysql_escape_string() call! This code does not work.", E_USER_ERROR)) ? "" : ""));
-
-			// Check database
-			$query  = "SELECT first_name, last_name FROM users WHERE user_id = $id;";
-			try {
-				$result = mysqli_query($GLOBALS["___mysqli_ston"],  $query ); // Removed 'or die' to suppress mysql errors
-			} catch (Exception $e) {
-				print "There was an error.";
-				exit;
-			}
-
-			$exists = false;
-			if ($result !== false) {
-				try {
-					$exists = (mysqli_num_rows( $result ) > 0); // The '@' character suppresses errors
-				} catch(Exception $e) {
-					$exists = false;
+			// Parameterised query - user input can never alter the statement structure.
+			$stmt = mysqli_prepare( $GLOBALS["___mysqli_ston"], "SELECT first_name, last_name FROM users WHERE user_id = ?" );
+			if( $stmt ) {
+				mysqli_stmt_bind_param( $stmt, "s", $id );
+				mysqli_stmt_execute( $stmt );
+				$result = mysqli_stmt_get_result( $stmt );
+				if( $result !== false ) {
+					$exists = ( mysqli_num_rows( $result ) > 0 );
 				}
+				mysqli_stmt_close( $stmt );
 			}
-			
 			break;
 		case SQLITE:
 			global $sqlite_db_connection;
-			
-			$query  = "SELECT first_name, last_name FROM users WHERE user_id = $id;";
-			try {
-				$results = $sqlite_db_connection->query($query);
+
+			$stmt = $sqlite_db_connection->prepare( 'SELECT first_name, last_name FROM users WHERE user_id = :id;' );
+			$stmt->bindValue( ':id', $id, SQLITE3_TEXT );
+			$results = $stmt->execute();
+			if( $results !== false ) {
 				$row = $results->fetchArray();
 				$exists = $row !== false;
-			} catch(Exception $e) {
-				$exists = false;
 			}
 			break;
 	}
