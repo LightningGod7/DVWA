@@ -1,13 +1,22 @@
 <?php
+// ECB leaks structure and lets an attacker splice blocks between tokens.
+// Tokens are now authenticated with AES-256-GCM: any tampering fails to
+// decrypt rather than producing an attacker chosen plaintext.
 function decrypt ($ciphertext, $key) {
-	$e = openssl_decrypt($ciphertext, 'aes-128-ecb', $key, OPENSSL_PKCS1_PADDING);
+	if (strlen ($ciphertext) < 29) {
+		throw new Exception ("Decryption failed");
+	}
+	$iv  = substr ($ciphertext, 0, 12);
+	$tag = substr ($ciphertext, 12, 16);
+	$ct  = substr ($ciphertext, 28);
+	$e = openssl_decrypt($ct, 'aes-256-gcm', $key, OPENSSL_RAW_DATA, $iv, $tag);
 	if ($e === false) {
 		throw new Exception ("Decryption failed");
 	}
 	return $e;
 }
 
-$key = "ik ben een aardbei";
+$key = hash ('sha256', 'ik ben een aardbei', true);
 
 $errors = "";
 $success = "";

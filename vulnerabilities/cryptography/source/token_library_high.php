@@ -1,29 +1,32 @@
 <?php
 
 define ("KEY", "rainbowclimbinghigh");
-define ("ALGO", "aes-128-cbc");
-define ("IV", "1234567812345678");
+// Unauthenticated CBC with a hardcoded IV allows bit flipping attacks
+// on the token. Use authenticated encryption with a fresh random IV.
+define ("ALGO", "aes-256-gcm");
 
 function encrypt ($plaintext, $iv) {
-	# Default padding is PKCS#7 which is interchangeable with PKCS#5
-	# https://en.wikipedia.org/wiki/Padding_%28cryptography%29#PKCS#5_and_PKCS#7
-
-	if (strlen ($iv) != 16) {
-		throw new Exception ("IV must be 16 bytes, " . strlen ($iv) . " passed");
+	if (strlen ($iv) != 12) {
+		throw new Exception ("IV must be 12 bytes, " . strlen ($iv) . " passed");
 	}
 	$tag = "";
 	$e = openssl_encrypt($plaintext, ALGO, KEY, OPENSSL_RAW_DATA, $iv, $tag);
 	if ($e === false) {
 		throw new Exception ("Encryption failed");
 	}
-	return $e;
+	return $e . $tag;
 }
 
 function decrypt ($ciphertext, $iv) {
-	if (strlen ($iv) != 16) {
-		throw new Exception ("IV must be 16 bytes, " . strlen ($iv) . " passed");
+	if (strlen ($iv) != 12) {
+		throw new Exception ("IV must be 12 bytes, " . strlen ($iv) . " passed");
 	}
-	$e = openssl_decrypt($ciphertext, ALGO, KEY, OPENSSL_RAW_DATA, $iv);
+	if (strlen ($ciphertext) < 17) {
+		throw new Exception ("Decryption failed");
+	}
+	$tag  = substr ($ciphertext, -16);
+	$text = substr ($ciphertext, 0, -16);
+	$e = openssl_decrypt($text, ALGO, KEY, OPENSSL_RAW_DATA, $iv, $tag);
 	if ($e === false) {
 		throw new Exception ("Decryption failed");
 	}
@@ -36,16 +39,11 @@ function decrypt ($ciphertext, $iv) {
 function create_token ($debug = false) {
 	$token = "userid:2";
 
-	if ($debug) {
-		print "Clear text token: " . $token . "\n";
-		print "Encryption key: " . KEY . "\n";
-		print "IV: " . (IV) . "\n";
-	}
-
-	$e = encrypt ($token, IV);
+	$iv = openssl_random_pseudo_bytes (12);
+	$e = encrypt ($token, $iv);
 	$data = array (
 					"token" => base64_encode ($e),
-					"iv" => base64_encode (IV)
+					"iv" => base64_encode ($iv)
 				);
 	return json_encode($data);
 }
