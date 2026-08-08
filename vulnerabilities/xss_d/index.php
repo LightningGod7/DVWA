@@ -48,17 +48,26 @@ $page[ 'body' ] = <<<EOF
 		<form name="XSS" method="GET">
 			<select name="default">
 				<script>
-					if (document.location.href.indexOf("default=") >= 0) {
-						var lang = document.location.href.substring(document.location.href.indexOf("default=")+8);
-						document.write("<option value='" + lang + "'>" + $decodeURI(lang) + "</option>");
-						document.write("<option value='' disabled='disabled'>----</option>");
-					}
-					    
-					document.write("<option value='English'>English</option>");
-					document.write("<option value='French'>French</option>");
-					document.write("<option value='Spanish'>Spanish</option>");
-					document.write("<option value='German'>German</option>");
-				</script>
+	// DOM XSS cannot be fixed by server side encoding: the sink is here in the
+	// browser. The language is matched against a fixed allow-list and inserted
+	// with textContent, so attacker controlled markup is never parsed as HTML.
+	(function () {
+		var ALLOWED = ["English", "French", "Spanish", "German"];
+		var sel = document.querySelector("select[name='default']");
+		if (!sel) { return; }
+		var m = /[?&]default=([^&#]*)/.exec(document.location.search);
+		var lang = null;
+		if (m) {
+			try { lang = decodeURIComponent(m[1].replace(/\+/g, " ")); } catch (e) { lang = null; }
+		}
+		if (ALLOWED.indexOf(lang) === -1) { return; }
+		var opt = document.createElement("option");
+		opt.value = lang;
+		opt.textContent = lang;
+		opt.selected = true;
+		sel.appendChild(opt);
+	})();
+</script>
 			</select>
 			<input type="submit" value="Select" />
 		</form>
