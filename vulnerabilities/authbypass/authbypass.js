@@ -5,10 +5,10 @@ function show_save_result (data) {
 		document.getElementById('save_result').innerText = 'Save Failed';
 	}
 }
-	
+
 function submit_change(id) {
-	first_name = document.getElementById('first_name_' + id).value
-	surname = document.getElementById('surname_' + id).value
+	var first_name = document.getElementById('first_name_' + id).value;
+	var surname = document.getElementById('surname_' + id).value;
 
 	fetch('change_user_details.php', {
 		method: 'POST',
@@ -34,19 +34,50 @@ function populate_form() {
 			return;
 		}
 		const users = JSON.parse (this.responseText);
-		table_body = document.getElementById('user_table').getElementsByTagName('tbody')[0];
+		var table_body = document.getElementById('user_table').getElementsByTagName('tbody')[0];
 		users.forEach(updateTable);
 
+		/*
+		 * Every value below comes from the database and is therefore attacker
+		 * controlled. It is inserted with the DOM API (textContent / value
+		 * property / addEventListener) instead of innerHTML, so the browser
+		 * never parses it as HTML and stored XSS is not possible.
+		 */
+		function makeInput (id, name, value) {
+			var input = document.createElement('input');
+			input.type = 'text';
+			input.id = id;
+			input.name = name;
+			input.value = value;          // property assignment, never parsed as HTML
+			return input;
+		}
+
 		function updateTable (user) {
+			var user_id = String(user['user_id']);
+
 			var row = table_body.insertRow(0);
+
 			var cell0 = row.insertCell(-1);
-			cell0.innerHTML = user['user_id'] + '<input type="hidden" id="user_id_' + user['user_id'] + '" name="user_id" value="' + user['user_id'] + '" />';
+			cell0.appendChild(document.createTextNode(user_id));
+			var hidden = document.createElement('input');
+			hidden.type = 'hidden';
+			hidden.id = 'user_id_' + user_id;
+			hidden.name = 'user_id';
+			hidden.value = user_id;
+			cell0.appendChild(hidden);
+
 			var cell1 = row.insertCell(1);
-			cell1.innerHTML = '<input type="text" id="first_name_' + user['user_id'] + '" name="first_name" value="' + user['first_name'] + '" />';
+			cell1.appendChild(makeInput('first_name_' + user_id, 'first_name', user['first_name']));
+
 			var cell2 = row.insertCell(2);
-			cell2.innerHTML = '<input type="text" id="surname_' + user['user_id'] + '" name="surname" value="' + user['surname'] + '" />';
+			cell2.appendChild(makeInput('surname_' + user_id, 'surname', user['surname']));
+
 			var cell3 = row.insertCell(3);
-			cell3.innerHTML = '<input type="button" value="Update" onclick="submit_change(' + user['user_id'] + ')" />';
+			var button = document.createElement('input');
+			button.type = 'button';
+			button.value = 'Update';
+			button.addEventListener('click', function () { submit_change(user_id); });
+			cell3.appendChild(button);
 		}
 	};
 	xhr.send();

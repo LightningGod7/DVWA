@@ -23,7 +23,9 @@ final class User
     #[OAT\Property(type: 'integer', example: 1)]
     public int $level;
 
-	public string $password;
+	// Never exposed through the API. Kept private so it cannot be serialised
+	// by accident (json_encode / var_export only see public properties).
+	private string $password;
 
 	function __construct ($id, $name, $level, $password) {
 		if (is_null ($id)) {
@@ -38,13 +40,6 @@ final class User
 	public function toArray($version) {
 		switch ($version) {
 			case 1:
-				$a = array (
-					"id" => $this->id,
-					"name" => $this->name,
-					"level" => $this->level,
-					"password" => $this->password,
-				);
-				break;
 			default:
 			case 2:
 				$a = array (

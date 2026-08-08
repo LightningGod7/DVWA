@@ -47,33 +47,60 @@ $html = '';
 $html .= "<div class='log-container'>";
 $html .= "<h3>Access Log</h3>";
 
-// Get logs from the bac_log table
-$log_query = "SELECT l.id, l.user_id, l.target_id, l.ip_address, l.timestamp, 
-                 u1.user as accessor_user, u2.user as target_user 
-                 FROM bac_log l 
-                 LEFT JOIN users u1 ON l.user_id = u1.user_id 
-                 LEFT JOIN users u2 ON l.target_id = u2.user_id 
-                 ORDER BY l.timestamp DESC LIMIT 50";
+// Resolve the authenticated identity from the database. The access log
+// contains other people's activity, so a normal user may only see their own
+// rows; administrators see everything.
+$me_stmt = mysqli_prepare($GLOBALS["___mysqli_ston"], "SELECT user_id, role FROM users WHERE user = ? LIMIT 1");
+$me_user = dvwaCurrentUser();
+mysqli_stmt_bind_param($me_stmt, "s", $me_user);
+mysqli_stmt_execute($me_stmt);
+$me_res = mysqli_stmt_get_result($me_stmt);
+$me = ($me_res && mysqli_num_rows($me_res) > 0) ? mysqli_fetch_assoc($me_res) : ['user_id' => 0, 'role' => ''];
+mysqli_stmt_close($me_stmt);
+$me_id = intval($me['user_id']);
+$me_is_admin = (strtolower((string)$me['role']) === 'admin');
 
-$log_result = mysqli_query($GLOBALS["___mysqli_ston"], $log_query);
+$log_select = "SELECT l.id, l.user_id, l.target_id, l.ip_address, l.timestamp,
+                 u1.user as accessor_user, u2.user as target_user
+                 FROM bac_log l
+                 LEFT JOIN users u1 ON l.user_id = u1.user_id
+                 LEFT JOIN users u2 ON l.target_id = u2.user_id ";
+
+if ($me_is_admin) {
+    $log_stmt = mysqli_prepare($GLOBALS["___mysqli_ston"], $log_select . "ORDER BY l.timestamp DESC LIMIT 50");
+} else {
+    $log_stmt = mysqli_prepare($GLOBALS["___mysqli_ston"], $log_select . "WHERE l.user_id = ? ORDER BY l.timestamp DESC LIMIT 50");
+    mysqli_stmt_bind_param($log_stmt, "i", $me_id);
+}
+mysqli_stmt_execute($log_stmt);
+$log_result = mysqli_stmt_get_result($log_stmt);
 
 if ($log_result && mysqli_num_rows($log_result) > 0) {
     $html .= "<table class='log-table'>";
     $html .= "<tr><th>ID</th><th>Accessor</th><th>Target</th><th>IP Address</th><th>Timestamp</th></tr>";
 
+    // Every column below originates from user controlled data (usernames and
+    // the recorded address), so each one is escaped before rendering.
     while ($log = mysqli_fetch_assoc($log_result)) {
-        $target_user = $log['target_user'] ? $log['target_user'] : 'Non-existent User (ID: ' . $log['target_id'] . ')';
+        $e = function ($v) {
+            return htmlspecialchars((string)$v, ENT_QUOTES | ENT_HTML5, 'UTF-8');
+        };
+
+        $target_user = $log['target_user']
+            ? $e($log['target_user'])
+            : 'Non-existent User (ID: ' . $e($log['target_id']) . ')';
 
         $html .= "<tr>";
-        $html .= "<td>{$log['id']}</td>";
-        $html .= "<td>{$log['accessor_user']} (ID: {$log['user_id']})</td>";
+        $html .= "<td>" . $e($log['id']) . "</td>";
+        $html .= "<td>" . $e($log['accessor_user']) . " (ID: " . $e($log['user_id']) . ")</td>";
         $html .= "<td>{$target_user}</td>";
-        $html .= "<td>{$log['ip_address']}</td>";
-        $html .= "<td>{$log['timestamp']}</td>";
+        $html .= "<td>" . $e($log['ip_address']) . "</td>";
+        $html .= "<td>" . $e($log['timestamp']) . "</td>";
         $html .= "</tr>";
     }
 
     $html .= "</table>";
+    mysqli_stmt_close($log_stmt);
 } else {
     $html .= "<p>No access logs found.</p>";
 }

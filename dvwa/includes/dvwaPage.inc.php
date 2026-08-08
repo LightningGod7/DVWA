@@ -47,17 +47,17 @@ function dvwa_start_session() {
 	// the security level.
 
 	$security_level = dvwaSecurityLevelGet();
-	if ($security_level == 'impossible') {
-		$httponly = true;
-		$samesite = "Strict";
-	}
-	else {
-		$httponly = false;
-		$samesite = "";
-	}
+	// The session cookie is never read by application JavaScript, so it is
+	// always HttpOnly and SameSite=Strict. This denies a successful XSS the
+	// ability to steal the session and stops cross site request forgery from
+	// riding on an authenticated session.
+	$httponly = true;
+	$samesite = "Strict";
 
 	$maxlifetime = 86400;
-	$secure = false;
+	// Mark the cookie secure whenever the request actually arrived over TLS.
+	$secure = ( !empty( $_SERVER['HTTPS'] ) && strtolower( $_SERVER['HTTPS'] ) !== 'off' )
+		|| ( isset( $_SERVER['SERVER_PORT'] ) && (int)$_SERVER['SERVER_PORT'] === 443 );
 	$domain = parse_url($_SERVER['HTTP_HOST'], PHP_URL_HOST);
 
 	/*
@@ -94,15 +94,15 @@ function dvwa_start_session() {
 	 * set the id to its previous value using session_id(), which will force
 	 * the Set-Cookie header.
 	*/
-	if ($security_level == 'impossible') {
-		session_start();
-		session_regenerate_id(); // force a new id to be generated
-	}
-	else {
-		if (isset($_COOKIE[session_name()])) // if a session id already exists
-			session_id($_COOKIE[session_name()]); // we keep the same id
-		session_start(); // otherwise a new one will be generated here
-	}
+	/*
+	 * A session id supplied by the client is never adopted. The id is always
+	 * regenerated here (this function runs on login and whenever the cookie
+	 * flags change), which discards any identifier an attacker planted in the
+	 * victim's browser before authentication. That is the fix for session
+	 * fixation, and it is applied at every security level.
+	 */
+	session_start();
+	session_regenerate_id(true); // new id, old session file deleted
 }
 
 if (array_key_exists ("Login", $_POST) && $_POST['Login'] == "Login") {
@@ -161,12 +161,22 @@ function dvwaLogout() {
 
 
 function dvwaPageReload() {
-	if  ( array_key_exists( 'HTTP_X_FORWARDED_PREFIX' , $_SERVER )) {
-		dvwaRedirect( $_SERVER[ 'HTTP_X_FORWARDED_PREFIX' ] . $_SERVER[ 'PHP_SELF' ] );
+	$prefix = '';
+
+	/*
+	 * X-Forwarded-Prefix is supplied by the client, so it is only honoured
+	 * when it is a plain single leading slash path segment list. Anything
+	 * that could leave this origin (a scheme, a "//host" authority, a
+	 * backslash, whitespace or a control character) is discarded.
+	 */
+	if ( array_key_exists( 'HTTP_X_FORWARDED_PREFIX', $_SERVER ) ) {
+		$candidate = (string)$_SERVER[ 'HTTP_X_FORWARDED_PREFIX' ];
+		if ( preg_match( '{^/(?!/)[A-Za-z0-9._~/-]*$}', $candidate ) ) {
+			$prefix = rtrim( $candidate, '/' );
+		}
 	}
-	else {
-		dvwaRedirect( $_SERVER[ 'PHP_SELF' ] );
-	}
+
+	dvwaRedirect( $prefix . $_SERVER[ 'PHP_SELF' ] );
 }
 
 function dvwaCurrentUser() {
@@ -190,7 +200,11 @@ function &dvwaPageNewGrab() {
 
 
 function dvwaThemeGet() {
-	if (isset($_COOKIE['theme'])) {
+	// The theme name is written straight into a class attribute, so only known
+	// good values are ever returned. Anything else falls back to the default.
+	$themes = array( 'light', 'dark' );
+
+	if ( isset( $_COOKIE['theme'] ) && in_array( $_COOKIE['theme'], $themes, true ) ) {
 		return $_COOKIE[ 'theme' ];
 	}
 	return 'light';
@@ -200,8 +214,13 @@ function dvwaThemeGet() {
 function dvwaSecurityLevelGet() {
 	global $_DVWA;
 
-	// If there is a security cookie, that takes priority.
-	if (isset($_COOKIE['security'])) {
+	// If there is a valid security cookie, that takes priority. The value
+	// selects an include file elsewhere, so it is checked against the known
+	// list rather than trusted as given.
+	global $security_levels;
+	$levels = isset( $security_levels ) ? $security_levels : array( 'low', 'medium', 'high', 'impossible' );
+
+	if (isset($_COOKIE['security']) && in_array( $_COOKIE['security'], $levels, true )) {
 		return $_COOKIE[ 'security' ];
 	}
 
@@ -216,14 +235,17 @@ function dvwaSecurityLevelGet() {
 }
 
 function dvwaSecurityLevelSet( $pSecurityLevel ) {
-	if( $pSecurityLevel == 'impossible' ) {
-		$httponly = true;
-	}
-	else {
-		$httponly = false;
-	}
+	$httponly = true;
+	$secure = ( !empty( $_SERVER['HTTPS'] ) && strtolower( $_SERVER['HTTPS'] ) !== 'off' )
+		|| ( isset( $_SERVER['SERVER_PORT'] ) && (int)$_SERVER['SERVER_PORT'] === 443 );
 
-	setcookie( 'security', $pSecurityLevel, 0, "/", "", false, $httponly );
+	setcookie( 'security', $pSecurityLevel, [
+		'expires'  => 0,
+		'path'     => '/',
+		'secure'   => $secure,
+		'httponly' => $httponly,
+		'samesite' => 'Strict',
+	] );
 	$_COOKIE['security'] = $pSecurityLevel;
 }
 
@@ -600,9 +622,39 @@ function dvwaDatabaseConnect() {
 // -- END (Database Management)
 
 
+/*
+ * Redirect to a location on this site only.
+ *
+ * Two things are enforced:
+ *   1. CR and LF (and every other control character) are removed, so a value
+ *      that reached us from a request cannot inject extra response headers or
+ *      a response body.
+ *   2. The destination must stay on this origin. An absolute URL, a scheme
+ *      relative "//evil.example" and a "/\evil.example" style authority are
+ *      all rejected and replaced with the site root, which closes the open
+ *      redirect.
+ */
 function dvwaRedirect( $pLocation ) {
+	$location = preg_replace( '/[\x00-\x1F\x7F]/', '', (string)$pLocation );
+
+	// Anything that could name another origin is refused: a scheme
+	// ("https://evil"), an authority ("//evil" or "/\evil"), or a backslash
+	// that browsers normalise into a slash. What is left is a path on this
+	// site, which is all this function is ever asked to produce.
+	$normalised = str_replace( '\\', '/', $location );
+
+	$offSite = ( $normalised === '' )
+		|| ( strncmp( $normalised, '//', 2 ) === 0 )
+		|| ( parse_url( $normalised, PHP_URL_SCHEME ) !== null )
+		|| ( parse_url( $normalised, PHP_URL_HOST ) !== null )
+		|| ( preg_match( '/^\s*[A-Za-z][A-Za-z0-9+.-]*:/', $normalised ) === 1 );
+
+	if ( $offSite ) {
+		$location = 'index.php';
+	}
+
 	session_commit();
-	header( "Location: {$pLocation}" );
+	header( "Location: {$location}" );
 	exit;
 }
 
@@ -614,14 +666,11 @@ function dvwaGuestbook() {
 	$guestbook = '';
 
 	while( $row = mysqli_fetch_row( $result ) ) {
-		if( dvwaSecurityLevelGet() == 'impossible' ) {
-			$name    = htmlspecialchars( $row[0] );
-			$comment = htmlspecialchars( $row[1] );
-		}
-		else {
-			$name    = $row[0];
-			$comment = $row[1];
-		}
+		// Guestbook entries are attacker controlled and are escaped on output
+		// at every security level, so a stored payload is rendered as text
+		// rather than executed.
+		$name    = htmlspecialchars( (string)$row[0], ENT_QUOTES | ENT_HTML5, 'UTF-8' );
+		$comment = htmlspecialchars( (string)$row[1], ENT_QUOTES | ENT_HTML5, 'UTF-8' );
 
 		$guestbook .= "<div id=\"guestbook_comments\">Name: {$name}<br />" . "Message: {$comment}<br /></div>\n";
 	}
@@ -638,7 +687,8 @@ function checkToken( $user_token, $session_token, $returnURL ) {  # Validate the
 		return true;
 	}
 
-	if( $user_token !== $session_token || !isset( $session_token ) ) {
+	if( !isset( $session_token ) || !is_string( $session_token ) || $session_token === ''
+		|| !is_string( $user_token ) || !hash_equals( $session_token, $user_token ) ) {
 		dvwaMessagePush( 'CSRF token is incorrect' );
 		dvwaRedirect( $returnURL );
 	}
@@ -648,7 +698,9 @@ function generateSessionToken() {  # Generate a brand new (CSRF) token
 	if( isset( $_SESSION[ 'session_token' ] ) ) {
 		destroySessionToken();
 	}
-	$_SESSION[ 'session_token' ] = md5( uniqid() );
+	// uniqid() is derived from the clock and is guessable, so the anti CSRF
+	// token came out predictable. Use the cryptographic RNG instead.
+	$_SESSION[ 'session_token' ] = bin2hex( random_bytes( 32 ) );
 }
 
 function destroySessionToken() {  # Destroy any session with the name 'session_token'
