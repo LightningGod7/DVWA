@@ -1,22 +1,49 @@
 <?php
 
-if( isset( $_GET[ 'Change' ] ) ) {
-	// Checks to see where the request came from
-	if( stripos( $_SERVER[ 'HTTP_REFERER' ] ,$_SERVER[ 'SERVER_NAME' ]) !== false ) {
+if( !function_exists( 'dvwaSameOriginRequest' ) ) {
+	// Reject state changing requests whose Origin/Referer is not this site.
+	function dvwaSameOriginRequest() {
+		$host = isset( $_SERVER['HTTP_HOST'] ) ? $_SERVER['HTTP_HOST'] : $_SERVER['SERVER_NAME'];
+		$source = '';
+		if( !empty( $_SERVER['HTTP_ORIGIN'] ) ) {
+			$source = $_SERVER['HTTP_ORIGIN'];
+		} elseif( !empty( $_SERVER['HTTP_REFERER'] ) ) {
+			$source = $_SERVER['HTTP_REFERER'];
+		} else {
+			return true;
+		}
+		$parsed = parse_url( $source, PHP_URL_HOST );
+		if( empty( $parsed ) ) {
+			return false;
+		}
+		$port = parse_url( $source, PHP_URL_PORT );
+		$bare = preg_replace( '/:\d+$/', '', $host );
+		return ( strcasecmp( $parsed, $bare ) === 0 ) || ( $port && strcasecmp( $parsed . ':' . $port, $host ) === 0 );
+	}
+}
+
+if( isset( $_REQUEST[ 'Change' ] ) ) {
+	// Check Anti-CSRF token - a forged cross site request cannot read this value.
+	checkToken( isset( $_REQUEST[ 'user_token' ] ) ? $_REQUEST[ 'user_token' ] : '', $_SESSION[ 'session_token' ], 'index.php' );
+
+	if( !dvwaSameOriginRequest() ) {
+		$html .= "<pre>That request didn't look correct.</pre>";
+	}
+	else {
 		// Get input
-		$pass_new  = $_GET[ 'password_new' ];
-		$pass_conf = $_GET[ 'password_conf' ];
+		$pass_new  = $_REQUEST[ 'password_new' ];
+		$pass_conf = $_REQUEST[ 'password_conf' ];
 
 		// Do the passwords match?
 		if( $pass_new == $pass_conf ) {
-			// They do!
-			$pass_new = ((isset($GLOBALS["___mysqli_ston"]) && is_object($GLOBALS["___mysqli_ston"])) ? mysqli_real_escape_string($GLOBALS["___mysqli_ston"],  $pass_new ) : ((trigger_error("[MySQLConverterToo] Fix the mysql_escape_string() call! This code does not work.", E_USER_ERROR)) ? "" : ""));
-			$pass_new = md5( $pass_new );
+			$pass_new = md5( stripslashes( $pass_new ) );
 
-			// Update the database
+			// Update the database with a parameterised statement
 			$current_user = dvwaCurrentUser();
-			$insert = "UPDATE `users` SET password = '$pass_new' WHERE user = '" . $current_user . "';";
-			$result = mysqli_query($GLOBALS["___mysqli_ston"],  $insert ) or die( '<pre>' . ((is_object($GLOBALS["___mysqli_ston"])) ? mysqli_error($GLOBALS["___mysqli_ston"]) : (($___mysqli_res = mysqli_connect_error()) ? $___mysqli_res : false)) . '</pre>' );
+			$data = $db->prepare( 'UPDATE users SET password = (:password) WHERE user = (:user);' );
+			$data->bindParam( ':password', $pass_new, PDO::PARAM_STR );
+			$data->bindParam( ':user', $current_user, PDO::PARAM_STR );
+			$data->execute();
 
 			// Feedback for the user
 			$html .= "<pre>Password Changed.</pre>";
@@ -26,12 +53,9 @@ if( isset( $_GET[ 'Change' ] ) ) {
 			$html .= "<pre>Passwords did not match.</pre>";
 		}
 	}
-	else {
-		// Didn't come from a trusted source
-		$html .= "<pre>That request didn't look correct.</pre>";
-	}
-
-	((is_null($___mysqli_res = mysqli_close($GLOBALS["___mysqli_ston"]))) ? false : $___mysqli_res);
 }
+
+// Generate Anti-CSRF token
+generateSessionToken();
 
 ?>
